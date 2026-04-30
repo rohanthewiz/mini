@@ -17,10 +17,19 @@ func StartWebServer() {
 		port = defaultPort
 	}
 
-	s := rweb.NewServer(rweb.ServerOptions{
+	s := newServer(rweb.ServerOptions{
 		Address: fmt.Sprintf(":%s", port),
 		Verbose: true,
 	})
+
+	if err := s.Run(); err != nil {
+		logger.LogErr(err, "where", "at server exit")
+	}
+}
+
+// newServer builds a configured rweb server with all routes registered.
+func newServer(opts rweb.ServerOptions) *rweb.Server {
+	s := rweb.NewServer(opts)
 
 	s.Use(rweb.RequestInfo)
 
@@ -31,7 +40,5 @@ func StartWebServer() {
 
 	s.Get("/", rootHandler)
 
-	if err := s.Run(); err != nil {
-		logger.LogErr(err, "where", "at server exit")
-	}
+	return s
 }

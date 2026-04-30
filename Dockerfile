@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-FROM cgr.dev/chainguard/go:latest-dev AS builder
+FROM golang:1.26-alpine AS builder
 WORKDIR /work
 
 # Copy go mod files first for better layer caching
@@ -12,7 +12,13 @@ ARG BUILD_NUMBER=""
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w -X main.BuildNumber=${BUILD_NUMBER}" -o app .
 
 
-FROM cgr.dev/chainguard/static:latest
+# Alternative distroless runtime (smaller, no shell):
+# FROM gcr.io/distroless/static-debian12
+FROM alpine:3.20
+
+RUN apk add --no-cache ca-certificates && \
+    addgroup -g 1001 -S app && \
+    adduser -u 1001 -S app -G app
 
 COPY --from=builder --chmod=0755 --chown=1001:1001 /work/app /app/app
 
