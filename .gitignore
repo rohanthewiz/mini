@@ -1,0 +1,12 @@
+.claude/
+.idea/
+.zed
+.vscode/
+opencode.json
+.DS_Store
+
+play/
+testing/
+certs/
+
+mini

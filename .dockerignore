@@ -1,0 +1,34 @@
+# VCS
+.git
+.gitignore
+.gitattributes
+
+# IDE / editor
+.idea/
+.vscode/
+.zed
+.qodo
+.claude/
+opencode.json
+
+# OS
+.DS_Store
+**/.DS_Store
+
+# Local-only directories
+play/
+testing/
+certs/
+
+# Prebuilt binary (rebuilt inside the image)
+mini
+app
+
+# Docker / docs (not needed inside the image)
+Dockerfile
+.dockerignore
+README.md
+CLAUDE.md
+
+# Test files
+**/*_test.go
