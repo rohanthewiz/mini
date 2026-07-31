@@ -43,6 +43,15 @@ per process (`sync.OnceValues`) and served from memory:
 - `app.ts` → minified ES2020 via [esbuild](https://github.com/evanw/esbuild)'s
   Go API — TypeScript stripping, minification, no toolchain to install
 
+esbuild strips types but does not *check* them, so CI runs
+[tsgo](https://github.com/microsoft/typescript-go) — the Go port of the
+TypeScript compiler, installed with `go install`, no Node involved:
+
+```sh
+go install github.com/microsoft/typescript-go/cmd/tsgo@latest
+tsgo --noEmit -p assets
+```
+
 `main()` pre-warms both at startup, so a compile error fails the process
 instead of surfacing as a 500 on the first request. Each asset is fingerprinted
 at the same time — the leading 8 bytes of its compiled output's SHA-256, used
@@ -105,7 +114,11 @@ second, which the client redraws every 5s anyway.
 go test ./...
 go test -race ./...
 go test ./... -bench . -run '^$'
+tsgo --noEmit -p assets   # type-check the client script
 ```
+
+CI (`.github/workflows/ci.yml`) runs the build, `go vet`, `go test -race`, and
+the type check on every push to `main` and every pull request.
 
 Benchmarks turn off per-request logging (`startTestServer` sets
 `Verbose: !isBench`), so `ns/op` lines are not buried in stdout. The first

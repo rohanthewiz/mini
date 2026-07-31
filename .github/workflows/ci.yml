@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  # Pinned rather than @latest: typescript-go publishes no semver tags, so
+  # @latest would silently move under CI and turn an upstream change into a
+  # failure on an unrelated PR. Bump deliberately.
+  TSGO_VERSION: v0.0.0-20260731182708-5b1047d10d32
+
+jobs:
+  go:
+    name: Build & test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - run: go build ./...
+      - run: go vet ./...
+      # -race because the store's batch writer and the status cache are both
+      # concurrent by design; a data race there is the failure that would not
+      # show up in a plain test run.
+      - run: go test -race ./...
+
+  typecheck:
+    name: Type-check app.ts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # tsgo is the Go port of the TypeScript compiler, so the check needs no
+      # Node toolchain — it installs with the Go that is already here.
+      #
+      # This exists because esbuild (which builds app.ts in-process at server
+      # startup) strips type annotations without checking them: a typo like
+      # st.visitz compiles happily and fails silently in the browser. This job
+      # is the only thing that would catch it.
+      - name: Cache tsgo
+        id: cache-tsgo
+        uses: actions/cache@v4
+        with:
+          path: ~/go/bin/tsgo
+          key: tsgo-${{ runner.os }}-${{ env.TSGO_VERSION }}
+
+      - name: Install tsgo
+        if: steps.cache-tsgo.outputs.cache-hit != 'true'
+        run: go install github.com/microsoft/typescript-go/cmd/tsgo@${{ env.TSGO_VERSION }}
+
+      # Invoked by absolute path rather than relying on GOPATH/bin being on
+      # PATH, so the step cannot silently resolve to something else.
+      - name: Type-check
+        run: "$(go env GOPATH)/bin/tsgo --noEmit -p assets"

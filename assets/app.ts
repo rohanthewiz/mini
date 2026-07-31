@@ -1,7 +1,10 @@
 // Client script, authored in TypeScript. esbuild (embedded in the Go binary)
 // strips the type annotations and minifies at server startup — see assets.go.
-// Note esbuild does type *stripping*, not type *checking*; run tsc/tsgo in CI
-// if full checking is ever wanted.
+//
+// esbuild does type *stripping*, not type *checking*: it would compile a typo
+// like st.visitz without complaint, leaving it to fail silently in the
+// browser. tsgo does the checking, in CI and via `tsgo --noEmit -p assets`
+// locally — see tsconfig.json and .github/workflows/ci.yml.
 
 // Mirror of the JSON shape served by /api/status (web/handlers.go).
 interface Status {

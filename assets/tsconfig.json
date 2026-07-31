@@ -1,0 +1,31 @@
+{
+  // Type-checking config for app.ts. Nothing in the build reads this: esbuild
+  // (see assets.go) strips types without consulting a tsconfig, so this file
+  // exists purely so tsgo can check what esbuild silently accepts.
+  //
+  // Run `tsgo --noEmit -p assets` from the repo root; CI does exactly that.
+  "compilerOptions": {
+    // Matches api.ES2020 in assets.go — checking against a newer target than
+    // we emit would let through syntax the shipped bundle cannot use.
+    "target": "ES2020",
+    "lib": ["ES2020", "DOM"],
+
+    // No "module" setting: app.ts has no imports or exports, so TypeScript
+    // treats it as a classic script regardless — which is what it is, loaded
+    // by a bare <script defer>.
+
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "forceConsistentCasingInFileNames": true,
+
+    // Checking only — the real emit is esbuild's, in-process at startup.
+    "noEmit": true,
+
+    // The bundled DOM/ES lib definitions are not ours to fix.
+    "skipLibCheck": true
+  },
+  "include": ["app.ts"]
+}
