@@ -1,5 +1,7 @@
 # mini
 
+[![CI](https://github.com/rohanthewiz/mini/actions/workflows/ci.yml/badge.svg)](https://github.com/rohanthewiz/mini/actions/workflows/ci.yml)
+
 A small, dependency-light Go web service: [rweb](https://github.com/rohanthewiz/rweb)
 for HTTP, [element](https://github.com/rohanthewiz/element) for server-rendered
 HTML, [bytdb](https://github.com/rohanthewiz/bytdb) for storage, and a
@@ -27,11 +29,8 @@ The server listens on `:8000` by default.
   it every 5s to keep the on-page counter live
 - `GET /health` — liveness/readiness probe (returns `ok`)
 - `GET /assets/<fingerprint>/app.css`, `GET /assets/<fingerprint>/app.js` —
-  compiled front-end assets, cached for a year and never revalidated. These
-  are the URLs the page references.
-- `GET /assets/app.css`, `GET /assets/app.js` — the same bytes at stable
-  paths, served under revalidation (`no-cache` + `ETag`, so a returning
-  client gets a body-less 304)
+  compiled front-end assets, cached for a year and never revalidated. This is
+  the only way assets are served; there are no unversioned paths.
 
 ## Front-end pipeline
 
@@ -58,15 +57,15 @@ at the same time — the leading 8 bytes of its compiled output's SHA-256, used
 both as the `ETag` and as a path segment.
 
 The rendered page references the fingerprinted URLs
-(`/assets/1c00c0ab01df9574/app.css`), which can be cached for a year with
+(`/assets/1c00c0ab01df9574/app.css`), which are cached for a year with
 `immutable`: that path names one exact build, so it can never return different
-bytes, and a new build simply changes the path. The bare paths remain, served
-under `no-cache` — "store it, but revalidate before reuse" — for anything
-referencing assets directly.
+bytes, and a new build simply changes the path. Nothing is served at an
+unversioned path.
 
 A request for a *stale* fingerprint (a page rendered just before a deploy)
-gets the current asset rather than a 404, under the revalidating policy, so
-the mismatch corrects itself instead of being cached for a year.
+gets the current asset rather than a 404 — a 404 would break that page — but
+under `no-cache` ("store it, but revalidate before reuse"), so the mismatch
+corrects itself instead of being cached for a year.
 
 ## Storage
 

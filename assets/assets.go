@@ -7,8 +7,8 @@
 //	app.ts      --(esbuild)--> minified JS      served at /assets/<fp>/app.js
 //
 // <fp> is a fingerprint of the compiled output, so each URL names one exact
-// build and can be cached forever. The unversioned paths still serve the same
-// bytes, but only under revalidation — see the web package.
+// build and can be cached forever. It is the only way the assets are served —
+// there are no unversioned routes — see the web package.
 package assets
 
 import (

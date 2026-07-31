@@ -46,12 +46,13 @@ func newServer(opts rweb.ServerOptions, st *store.Store) *rweb.Server {
 	}
 
 	// Asset URLs are fixed for the life of the process, so they are resolved
-	// here rather than on every render. A failure is logged and degrades to
-	// the unversioned paths (see assetURLs) instead of taking the server
-	// down — main() has already failed fast on a genuine compile error.
+	// here rather than on every render. A failure is logged rather than fatal:
+	// main() has already failed fast on a genuine compile error, so reaching
+	// this means something stranger, and a server that still answers /health
+	// is more diagnosable than one that refuses to start.
 	pa, err := assetURLs()
 	if err != nil {
-		logger.LogErr(err, "resolving fingerprinted asset URLs; falling back to unversioned paths")
+		logger.LogErr(err, "resolving fingerprinted asset URLs; page will render without them")
 	}
 
 	h := handlers{
@@ -71,13 +72,11 @@ func newServer(opts rweb.ServerOptions, st *store.Store) *rweb.Server {
 	// Compiled front-end assets: Stylus -> CSS via go-styl, TypeScript ->
 	// minified JS via esbuild, both in-process (see the assets package).
 	//
-	// Each is reachable two ways, hitting the same handler. The fingerprinted
-	// path is what the rendered HTML references and what earns the immutable
-	// year-long cache; the bare path stays for anything referencing assets
-	// directly and is served under revalidation. Segment counts differ, so
-	// the two patterns cannot collide.
-	s.Get("/assets/app.css", cssHandler)
-	s.Get("/assets/app.js", jsHandler)
+	// Fingerprinted paths only. The unversioned ones were dropped once the
+	// rendered page stopped referencing them: keeping a second URL for the
+	// same bytes meant a second cache policy to reason about, and any client
+	// still asking for an old fingerprint is already handled (see
+	// serveAsset).
 	s.Get("/assets/:"+assetVersionParam+"/app.css", cssHandler)
 	s.Get("/assets/:"+assetVersionParam+"/app.js", jsHandler)
 

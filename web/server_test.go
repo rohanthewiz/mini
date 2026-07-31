@@ -221,7 +221,12 @@ func getConditional(t *testing.T, url, ifNoneMatch string) (*http.Response, stri
 func TestAssetConditionalRequest(t *testing.T) {
 	base, _ := startTestServer(t)
 
-	for _, path := range []string{"/assets/app.css", "/assets/app.js"} {
+	pa, err := assetURLs()
+	if err != nil {
+		t.Fatalf("resolving asset URLs: %v", err)
+	}
+
+	for _, path := range []string{pa.CSSURL, pa.JSURL} {
 		first, full := get(t, base+path)
 		etag := first.Header.Get("ETag")
 		if etag == "" {
@@ -283,7 +288,11 @@ func TestFingerprintedAssetURLs(t *testing.T) {
 func TestStaleFingerprintServesCurrentAsset(t *testing.T) {
 	base, _ := startTestServer(t)
 
-	_, current := get(t, base+"/assets/app.css")
+	pa, err := assetURLs()
+	if err != nil {
+		t.Fatalf("resolving asset URLs: %v", err)
+	}
+	_, current := get(t, base+pa.CSSURL)
 
 	resp, body := get(t, base+"/assets/deadbeefdeadbeef/app.css")
 	if resp.StatusCode != http.StatusOK {
@@ -294,6 +303,20 @@ func TestStaleFingerprintServesCurrentAsset(t *testing.T) {
 	}
 	if cc := resp.Header.Get("Cache-Control"); cc != assetRevalidateCC {
 		t.Fatalf("stale fingerprint cache-control = %q, want %q", cc, assetRevalidateCC)
+	}
+}
+
+// TestUnversionedAssetPathsAreGone pins the retirement of the bare routes.
+// They served the same bytes under a second cache policy; now that nothing
+// references them, the only way to reach an asset is by fingerprint.
+func TestUnversionedAssetPathsAreGone(t *testing.T) {
+	base, _ := startTestServer(t)
+
+	for _, path := range []string{"/assets/app.css", "/assets/app.js"} {
+		resp, _ := get(t, base+path)
+		if resp.StatusCode != http.StatusNotFound {
+			t.Fatalf("%s: status = %d, want 404", path, resp.StatusCode)
+		}
 	}
 }
 
@@ -330,15 +353,20 @@ func TestETagMatches(t *testing.T) {
 func TestAssetEndpoints(t *testing.T) {
 	base, _ := startTestServer(t)
 
-	resp, body := get(t, base+"/assets/app.css")
+	pa, err := assetURLs()
+	if err != nil {
+		t.Fatalf("resolving asset URLs: %v", err)
+	}
+
+	resp, body := get(t, base+pa.CSSURL)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("css status = %d, want 200", resp.StatusCode)
 	}
 	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/css") {
 		t.Fatalf("css content-type = %q, want text/css", ct)
 	}
-	if cc := resp.Header.Get("Cache-Control"); cc != assetRevalidateCC {
-		t.Fatalf("css cache-control = %q, want %q", cc, assetRevalidateCC)
+	if cc := resp.Header.Get("Cache-Control"); cc != assetImmutableCC {
+		t.Fatalf("css cache-control = %q, want %q", cc, assetImmutableCC)
 	}
 	if etag := resp.Header.Get("ETag"); etag == "" {
 		t.Fatal("css response carries no ETag")
@@ -349,7 +377,7 @@ func TestAssetEndpoints(t *testing.T) {
 		t.Fatalf("compiled CSS missing accent color; got:\n%s", body)
 	}
 
-	resp, body = get(t, base+"/assets/app.js")
+	resp, body = get(t, base+pa.JSURL)
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("js status = %d, want 200", resp.StatusCode)
 	}

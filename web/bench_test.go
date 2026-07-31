@@ -63,7 +63,12 @@ func BenchmarkHTTPHealth(b *testing.B) {
 
 func BenchmarkHTTPAssetCSS(b *testing.B) {
 	base, _ := startTestServer(b)
-	benchGet(b, base, "/assets/app.css")
+
+	pa, err := assetURLs()
+	if err != nil {
+		b.Fatalf("resolving asset URLs: %v", err)
+	}
+	benchGet(b, base, pa.CSSURL)
 }
 
 // --- Read-only DB endpoint at increasing table sizes ---

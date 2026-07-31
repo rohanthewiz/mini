@@ -148,21 +148,20 @@ func (c *statusCache) body(visitCount func() int) ([]byte, error) {
 // The two cache policies an asset can be served under. Which one applies is a
 // property of the *URL*, not of the asset:
 //
-//   - A fingerprinted URL (/assets/<fp>/app.css) names one exact build, so it
-//     can never return different bytes. It is safe to cache for a year and
-//     never revalidate — "immutable" tells the browser to skip the
-//     conditional request even on a manual reload.
-//   - The unversioned URL (/assets/app.css) is stable across builds, so a
-//     long max-age would strand clients on a stale bundle after a deploy.
-//     "no-cache" does not mean "do not store" — it means "store it, but
-//     revalidate before reuse", settled by a header-only 304.
+//   - A URL carrying the current fingerprint (/assets/<fp>/app.css) names one
+//     exact build, so it can never return different bytes. It is safe to
+//     cache for a year and never revalidate — "immutable" tells the browser
+//     to skip the conditional request even on a manual reload.
+//   - A URL carrying any other fingerprint is a client from a previous build.
+//     It gets the current bytes (see serveAsset) but must not cache them
+//     under this URL, so "no-cache" — which does not mean "do not store", but
+//     "store it, and revalidate before reuse", settled by a header-only 304.
 const (
 	assetRevalidateCC = "no-cache"
 	assetImmutableCC  = "public, max-age=31536000, immutable" // one year
 )
 
-// assetVersionParam is the path parameter carrying the fingerprint on the
-// versioned routes; it is empty on the unversioned ones.
+// assetVersionParam is the path parameter carrying the fingerprint.
 const assetVersionParam = "v"
 
 // serveAsset writes a compiled asset with its cache headers, answering with
@@ -178,8 +177,7 @@ const assetVersionParam = "v"
 func serveAsset(ctx rweb.Context, asset assets.Asset, send func(rweb.Context, string) error) error {
 	res := ctx.Response()
 
-	// One comparison covers all three cases: the unversioned route (empty
-	// param), a stale fingerprint, and a current one.
+	// One comparison separates a client on this build from one on any other.
 	cacheControl := assetRevalidateCC
 	if ctx.Request().Param(assetVersionParam) == asset.Fingerprint {
 		cacheControl = assetImmutableCC
@@ -260,20 +258,19 @@ type pageAssets struct {
 // server construction, not per request: the compiled output cannot change for
 // the life of the process, so neither can these.
 //
-// On a compile failure it falls back to the unversioned paths. That case is
-// unreachable in production — main() pre-warms both assets and exits on
-// error — and if it were reached, the asset routes would be failing too; the
-// fallback just keeps the page referencing URLs that exist.
+// There is no fallback URL to offer on a compile failure — every asset route
+// is fingerprinted, and the fingerprint comes from output that does not
+// exist. The case is unreachable in production anyway (main() pre-warms both
+// assets and exits on error), and if it were reached the asset routes would
+// be failing too. The caller logs and carries on with empty URLs.
 func assetURLs() (pageAssets, error) {
-	pa := pageAssets{CSSURL: "/assets/app.css", JSURL: "/assets/app.js"}
-
 	css, err := assets.CSS()
 	if err != nil {
-		return pa, serr.Wrap(err, "getting compiled CSS")
+		return pageAssets{}, serr.Wrap(err, "getting compiled CSS")
 	}
 	js, err := assets.JS()
 	if err != nil {
-		return pa, serr.Wrap(err, "getting compiled JS")
+		return pageAssets{}, serr.Wrap(err, "getting compiled JS")
 	}
 
 	return pageAssets{CSSURL: css.URL, JSURL: js.URL}, nil
