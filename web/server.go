@@ -45,7 +45,20 @@ func newServer(opts rweb.ServerOptions, st *store.Store) *rweb.Server {
 		s.Use(rweb.RequestInfo)
 	}
 
-	h := handlers{st: st, status: newStatusCache(statusCacheTTL)}
+	// Asset URLs are fixed for the life of the process, so they are resolved
+	// here rather than on every render. A failure is logged and degrades to
+	// the unversioned paths (see assetURLs) instead of taking the server
+	// down — main() has already failed fast on a genuine compile error.
+	pa, err := assetURLs()
+	if err != nil {
+		logger.LogErr(err, "resolving fingerprinted asset URLs; falling back to unversioned paths")
+	}
+
+	h := handlers{
+		st:     st,
+		status: newStatusCache(statusCacheTTL),
+		assets: pa,
+	}
 
 	// Liveness/readiness probe
 	s.Get("/health", func(ctx rweb.Context) error {
@@ -57,8 +70,16 @@ func newServer(opts rweb.ServerOptions, st *store.Store) *rweb.Server {
 
 	// Compiled front-end assets: Stylus -> CSS via go-styl, TypeScript ->
 	// minified JS via esbuild, both in-process (see the assets package).
+	//
+	// Each is reachable two ways, hitting the same handler. The fingerprinted
+	// path is what the rendered HTML references and what earns the immutable
+	// year-long cache; the bare path stays for anything referencing assets
+	// directly and is served under revalidation. Segment counts differ, so
+	// the two patterns cannot collide.
 	s.Get("/assets/app.css", cssHandler)
 	s.Get("/assets/app.js", jsHandler)
+	s.Get("/assets/:"+assetVersionParam+"/app.css", cssHandler)
+	s.Get("/assets/:"+assetVersionParam+"/app.js", jsHandler)
 
 	return s
 }

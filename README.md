@@ -26,9 +26,12 @@ The server listens on `:8000` by default.
 - `GET /api/status` — JSON `{response, env, visits}`; the client script polls
   it every 5s to keep the on-page counter live
 - `GET /health` — liveness/readiness probe (returns `ok`)
-- `GET /assets/app.css`, `GET /assets/app.js` — compiled front-end assets,
-  served with `Cache-Control: no-cache` and a content-derived `ETag`, so a
-  returning client revalidates and gets a body-less 304
+- `GET /assets/<fingerprint>/app.css`, `GET /assets/<fingerprint>/app.js` —
+  compiled front-end assets, cached for a year and never revalidated. These
+  are the URLs the page references.
+- `GET /assets/app.css`, `GET /assets/app.js` — the same bytes at stable
+  paths, served under revalidation (`no-cache` + `ETag`, so a returning
+  client gets a body-less 304)
 
 ## Front-end pipeline
 
@@ -41,15 +44,20 @@ per process (`sync.OnceValues`) and served from memory:
   Go API — TypeScript stripping, minification, no toolchain to install
 
 `main()` pre-warms both at startup, so a compile error fails the process
-instead of surfacing as a 500 on the first request. Each asset carries an
-`ETag` hashed from its compiled output at the same time.
+instead of surfacing as a 500 on the first request. Each asset is fingerprinted
+at the same time — the leading 8 bytes of its compiled output's SHA-256, used
+both as the `ETag` and as a path segment.
 
-The asset URLs are stable across builds, so they advertise
-`Cache-Control: no-cache` — "store it, but revalidate before reuse" — rather
-than a long `max-age` that would strand clients on a stale bundle after a
-deploy. Revalidation costs a header-only 304. Fingerprinting the URLs
-(`/assets/app.<hash>.css`) is what would unlock
-`max-age=31536000, immutable`.
+The rendered page references the fingerprinted URLs
+(`/assets/1c00c0ab01df9574/app.css`), which can be cached for a year with
+`immutable`: that path names one exact build, so it can never return different
+bytes, and a new build simply changes the path. The bare paths remain, served
+under `no-cache` — "store it, but revalidate before reuse" — for anything
+referencing assets directly.
+
+A request for a *stale* fingerprint (a page rendered just before a deploy)
+gets the current asset rather than a 404, under the revalidating policy, so
+the mismatch corrects itself instead of being cached for a year.
 
 ## Storage
 

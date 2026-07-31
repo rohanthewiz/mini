@@ -70,3 +70,31 @@ func TestETagsAreStableAndDistinct(t *testing.T) {
 		t.Fatalf("ETag changed between calls: %q -> %q", css.ETag, again.ETag)
 	}
 }
+
+// TestFingerprintedURLs pins the URL shape the web layer routes on and the
+// relationship between the two forms of the hash — the ETag is the
+// fingerprint quoted, so a URL match and a header match always agree.
+func TestFingerprintedURLs(t *testing.T) {
+	css, err := CSS()
+	if err != nil {
+		t.Fatalf("CSS(): %v", err)
+	}
+	js, err := JS()
+	if err != nil {
+		t.Fatalf("JS(): %v", err)
+	}
+
+	if css.URL != "/assets/"+css.Fingerprint+"/app.css" {
+		t.Fatalf("css URL = %q, does not embed fingerprint %q", css.URL, css.Fingerprint)
+	}
+	if js.URL != "/assets/"+js.Fingerprint+"/app.js" {
+		t.Fatalf("js URL = %q, does not embed fingerprint %q", js.URL, js.Fingerprint)
+	}
+	if css.ETag != `"`+css.Fingerprint+`"` {
+		t.Fatalf("ETag %q is not the quoted fingerprint %q", css.ETag, css.Fingerprint)
+	}
+	// 8 bytes of SHA-256, hex-encoded.
+	if len(css.Fingerprint) != 16 {
+		t.Fatalf("fingerprint %q is %d chars, want 16", css.Fingerprint, len(css.Fingerprint))
+	}
+}

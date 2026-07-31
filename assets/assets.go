@@ -3,8 +3,12 @@
 // compiled to CSS/JS in-process at startup — no Node, no external toolchain,
 // and a single self-contained deployable.
 //
-//	styles.styl --(go-styl)--> compressed CSS   served at /assets/app.css
-//	app.ts      --(esbuild)--> minified JS      served at /assets/app.js
+//	styles.styl --(go-styl)--> compressed CSS   served at /assets/<fp>/app.css
+//	app.ts      --(esbuild)--> minified JS      served at /assets/<fp>/app.js
+//
+// <fp> is a fingerprint of the compiled output, so each URL names one exact
+// build and can be cached forever. The unversioned paths still serve the same
+// bytes, but only under revalidation — see the web package.
 package assets
 
 import (
@@ -18,24 +22,42 @@ import (
 	"github.com/rohanthewiz/serr"
 )
 
-// Asset is a compiled front-end file together with the cache validator served
-// alongside it. The tag is derived from the compiled output rather than the
-// source, so it tracks exactly what the client receives — a compiler upgrade
-// that changes the emitted bytes changes the tag, and a source edit that
-// minifies to the same output does not.
+// Asset is a compiled front-end file together with everything needed to serve
+// and reference it. All of it is derived from the compiled output rather than
+// the source, so it tracks exactly what the client receives — a compiler
+// upgrade that changes the emitted bytes changes the fingerprint, and a
+// source edit that minifies to identical output does not.
+//
+// Fingerprint and ETag are the same hash in the two forms the HTTP layer
+// needs: bare in a URL path, quoted in the header. Both are stored rather
+// than derived per use, since neither can change once compiled.
 type Asset struct {
-	Body string
-	ETag string
+	Body        string
+	Fingerprint string // bare hex, appears in URL
+	ETag        string // same hash, quoted for the header
+	URL         string // fingerprinted path to reference from HTML
 }
 
-// etagFor returns a strong ETag for body: the leading 8 bytes of its
-// SHA-256, hex-encoded and quoted as RFC 9110 requires. Truncating is fine
-// here — the tag only has to tell one build's output apart from another's,
-// and 64 bits makes an accidental collision between two versions of the same
-// file implausible.
-func etagFor(body string) string {
+// newAsset assembles an Asset around a compiled body. name is the bare file
+// name ("app.css") that the fingerprinted URL ends in.
+//
+// The fingerprint is the leading 8 bytes of the body's SHA-256, hex-encoded.
+// Truncating is fine here — it only has to tell one build's output apart from
+// another's, and 64 bits makes an accidental collision between two versions
+// of the same file implausible.
+func newAsset(body, name string) Asset {
 	sum := sha256.Sum256([]byte(body))
-	return `"` + hex.EncodeToString(sum[:8]) + `"`
+	fingerprint := hex.EncodeToString(sum[:8])
+
+	return Asset{
+		Body:        body,
+		Fingerprint: fingerprint,
+		ETag:        `"` + fingerprint + `"`, // quoted, as RFC 9110 requires
+		// The fingerprint gets its own path segment rather than being spliced
+		// into the file name (app.<fp>.css): it routes as a plain parameter,
+		// and the file name stays recognisable in dev tools.
+		URL: "/assets/" + fingerprint + "/" + name,
+	}
 }
 
 //go:embed styles.styl
@@ -53,10 +75,10 @@ var (
 	compiledJS  = sync.OnceValues(compileJS)
 )
 
-// CSS returns the compiled, compressed stylesheet and its ETag.
+// CSS returns the compiled, compressed stylesheet with its cache metadata.
 func CSS() (Asset, error) { return compiledCSS() }
 
-// JS returns the transpiled, minified client script and its ETag.
+// JS returns the transpiled, minified client script with its cache metadata.
 func JS() (Asset, error) { return compiledJS() }
 
 func compileCSS() (Asset, error) {
@@ -68,7 +90,7 @@ func compileCSS() (Asset, error) {
 	}
 	// Hashed once here, with the compile, rather than per request: the
 	// output cannot change for the life of the process.
-	return Asset{Body: css, ETag: etagFor(css)}, nil
+	return newAsset(css, "app.css"), nil
 }
 
 func compileJS() (Asset, error) {
@@ -85,6 +107,5 @@ func compileJS() (Asset, error) {
 	if len(res.Errors) > 0 {
 		return Asset{}, serr.New("compiling app.ts: " + res.Errors[0].Text)
 	}
-	js := string(res.Code)
-	return Asset{Body: js, ETag: etagFor(js)}, nil
+	return newAsset(string(res.Code), "app.js"), nil
 }

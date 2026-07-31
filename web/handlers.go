@@ -22,10 +22,12 @@ import (
 // handlers groups the route handlers around their shared dependencies, so
 // tests can stand up a handler set against a throwaway store instead of
 // package-level state. status is a pointer because it carries a mutex and
-// method values copy the receiver at route-registration time.
+// method values copy the receiver at route-registration time; assets is a
+// plain value because it is resolved once at construction and never changes.
 type handlers struct {
 	st     *store.Store
 	status *statusCache
+	assets pageAssets
 }
 
 // rootHandler records the visit, then server-renders the landing page showing
@@ -45,7 +47,7 @@ func (h handlers) rootHandler(ctx rweb.Context) error {
 		return serr.Wrap(err, "fetching recent visits")
 	}
 
-	return ctx.WriteHTML(landingPage(visitCount, recentVisits))
+	return ctx.WriteHTML(landingPage(visitCount, recentVisits, h.assets))
 }
 
 // statusHandler is the JSON status endpoint. The client script polls it to
@@ -143,28 +145,47 @@ func (c *statusCache) body(visitCount func() int) ([]byte, error) {
 	return body, nil
 }
 
-// assetCacheControl is what the asset routes advertise.
+// The two cache policies an asset can be served under. Which one applies is a
+// property of the *URL*, not of the asset:
 //
-// The URLs are stable across builds (/assets/app.css, not
-// /assets/app.<hash>.css), so a long max-age would pin clients to a stale
-// bundle after a deploy with no way to bust it. "no-cache" does not mean "do
-// not store" — it means "store it, but revalidate before reuse", which is
-// exactly the trade available here: the client keeps the bytes and we settle
-// the conditional request with a header-only 304 instead of resending the
-// asset.
-//
-// Fingerprinting the URLs is what would unlock
-// "public, max-age=31536000, immutable"; that changes the rendered HTML, so
-// it is a separate step.
-const assetCacheControl = "no-cache"
+//   - A fingerprinted URL (/assets/<fp>/app.css) names one exact build, so it
+//     can never return different bytes. It is safe to cache for a year and
+//     never revalidate — "immutable" tells the browser to skip the
+//     conditional request even on a manual reload.
+//   - The unversioned URL (/assets/app.css) is stable across builds, so a
+//     long max-age would strand clients on a stale bundle after a deploy.
+//     "no-cache" does not mean "do not store" — it means "store it, but
+//     revalidate before reuse", settled by a header-only 304.
+const (
+	assetRevalidateCC = "no-cache"
+	assetImmutableCC  = "public, max-age=31536000, immutable" // one year
+)
+
+// assetVersionParam is the path parameter carrying the fingerprint on the
+// versioned routes; it is empty on the unversioned ones.
+const assetVersionParam = "v"
 
 // serveAsset writes a compiled asset with its cache headers, answering with
 // 304 when the client already holds this version. send is the rweb helper
 // that owns the content type (rweb.CSS, rweb.JS), so each asset route stays
 // a two-liner.
+//
+// A request for a *stale* fingerprint still gets the current asset rather
+// than a 404: only this build exists in the binary, and a page rendered just
+// before a deploy would otherwise load a broken stylesheet. It is served
+// under the revalidating policy, so the mismatch corrects itself instead of
+// being cached for a year.
 func serveAsset(ctx rweb.Context, asset assets.Asset, send func(rweb.Context, string) error) error {
 	res := ctx.Response()
-	res.SetHeader(consts.HeaderCacheControl, assetCacheControl)
+
+	// One comparison covers all three cases: the unversioned route (empty
+	// param), a stale fingerprint, and a current one.
+	cacheControl := assetRevalidateCC
+	if ctx.Request().Param(assetVersionParam) == asset.Fingerprint {
+		cacheControl = assetImmutableCC
+	}
+
+	res.SetHeader(consts.HeaderCacheControl, cacheControl)
 	res.SetHeader(consts.HeaderETag, asset.ETag)
 
 	if etagMatches(ctx.Request().Header(consts.HeaderIfNoneMatch), asset.ETag) {
@@ -227,9 +248,40 @@ func envName() string {
 	return "dev"
 }
 
+// pageAssets carries the fingerprinted asset URLs into the template. They are
+// passed in rather than read inside landingPage so the render stays a pure
+// function of its inputs.
+type pageAssets struct {
+	CSSURL string
+	JSURL  string
+}
+
+// assetURLs resolves the fingerprinted URLs for this build. Called once at
+// server construction, not per request: the compiled output cannot change for
+// the life of the process, so neither can these.
+//
+// On a compile failure it falls back to the unversioned paths. That case is
+// unreachable in production — main() pre-warms both assets and exits on
+// error — and if it were reached, the asset routes would be failing too; the
+// fallback just keeps the page referencing URLs that exist.
+func assetURLs() (pageAssets, error) {
+	pa := pageAssets{CSSURL: "/assets/app.css", JSURL: "/assets/app.js"}
+
+	css, err := assets.CSS()
+	if err != nil {
+		return pa, serr.Wrap(err, "getting compiled CSS")
+	}
+	js, err := assets.JS()
+	if err != nil {
+		return pa, serr.Wrap(err, "getting compiled JS")
+	}
+
+	return pageAssets{CSSURL: css.URL, JSURL: js.URL}, nil
+}
+
 // landingPage builds the full HTML document with element. The builder comes
 // from the pool since this runs per-request on the hottest route.
-func landingPage(visitCount int, recentVisits []store.Visit) string {
+func landingPage(visitCount int, recentVisits []store.Visit, pa pageAssets) string {
 	b := element.AcquireBuilder()
 	defer element.ReleaseBuilder(b)
 
@@ -238,10 +290,12 @@ func landingPage(visitCount int, recentVisits []store.Visit) string {
 			b.Meta("charset", "utf-8"),
 			b.Meta("name", "viewport", "content", "width=device-width, initial-scale=1"),
 			b.Title().T("mini"),
-			b.Link("rel", "stylesheet", "href", "/assets/app.css"),
+			// Fingerprinted URLs: a new build changes the path, so the
+			// browser fetches the new bytes without any cache busting of ours.
+			b.Link("rel", "stylesheet", "href", pa.CSSURL),
 			// defer: execute after parse, so the script can touch the DOM
 			// immediately without a DOMContentLoaded listener.
-			b.Script("src", "/assets/app.js", "defer", "defer").R(),
+			b.Script("src", pa.JSURL, "defer", "defer").R(),
 		),
 		b.Body().R(
 			b.H1().T("mini"),

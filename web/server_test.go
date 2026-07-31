@@ -102,8 +102,16 @@ func TestRootEndpoint(t *testing.T) {
 	if !regexp.MustCompile(`id="live-visits"[^>]*>2<`).MatchString(body) {
 		t.Fatalf("page does not show a visit count of 2; body:\n%s", body)
 	}
-	if !strings.Contains(body, "/assets/app.css") || !strings.Contains(body, "/assets/app.js") {
-		t.Fatalf("page does not reference compiled assets; body:\n%s", body)
+	// The page must reference the *fingerprinted* URLs — that is what makes
+	// the year-long immutable cache safe, so a regression to the bare paths
+	// has to fail here.
+	pa, err := assetURLs()
+	if err != nil {
+		t.Fatalf("resolving asset URLs: %v", err)
+	}
+	if !strings.Contains(body, pa.CSSURL) || !strings.Contains(body, pa.JSURL) {
+		t.Fatalf("page does not reference fingerprinted assets (%s, %s); body:\n%s",
+			pa.CSSURL, pa.JSURL, body)
 	}
 }
 
@@ -243,6 +251,52 @@ func TestAssetConditionalRequest(t *testing.T) {
 	}
 }
 
+// TestFingerprintedAssetURLs checks the payoff of fingerprinting: the URLs
+// the page actually references serve the asset under the year-long immutable
+// policy, which is only safe because the path names one exact build.
+func TestFingerprintedAssetURLs(t *testing.T) {
+	base, _ := startTestServer(t)
+
+	pa, err := assetURLs()
+	if err != nil {
+		t.Fatalf("resolving asset URLs: %v", err)
+	}
+
+	for _, url := range []string{pa.CSSURL, pa.JSURL} {
+		resp, body := get(t, base+url)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s: status = %d, want 200", url, resp.StatusCode)
+		}
+		if body == "" {
+			t.Fatalf("%s: empty body", url)
+		}
+		if cc := resp.Header.Get("Cache-Control"); cc != assetImmutableCC {
+			t.Fatalf("%s: cache-control = %q, want %q", url, cc, assetImmutableCC)
+		}
+	}
+}
+
+// TestStaleFingerprintServesCurrentAsset covers the deploy window: a page
+// rendered by the previous build asks for a fingerprint this binary does not
+// have. It must still get the current asset — 404 would break the page — and
+// under the revalidating policy, so the mismatch cannot be cached for a year.
+func TestStaleFingerprintServesCurrentAsset(t *testing.T) {
+	base, _ := startTestServer(t)
+
+	_, current := get(t, base+"/assets/app.css")
+
+	resp, body := get(t, base+"/assets/deadbeefdeadbeef/app.css")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("stale fingerprint status = %d, want 200", resp.StatusCode)
+	}
+	if body != current {
+		t.Fatal("stale fingerprint did not serve the current stylesheet")
+	}
+	if cc := resp.Header.Get("Cache-Control"); cc != assetRevalidateCC {
+		t.Fatalf("stale fingerprint cache-control = %q, want %q", cc, assetRevalidateCC)
+	}
+}
+
 // TestETagMatches covers the If-None-Match parsing rules that a real browser
 // or proxy can exercise but the happy-path test above never will.
 func TestETagMatches(t *testing.T) {
@@ -283,8 +337,8 @@ func TestAssetEndpoints(t *testing.T) {
 	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/css") {
 		t.Fatalf("css content-type = %q, want text/css", ct)
 	}
-	if cc := resp.Header.Get("Cache-Control"); cc != assetCacheControl {
-		t.Fatalf("css cache-control = %q, want %q", cc, assetCacheControl)
+	if cc := resp.Header.Get("Cache-Control"); cc != assetRevalidateCC {
+		t.Fatalf("css cache-control = %q, want %q", cc, assetRevalidateCC)
 	}
 	if etag := resp.Header.Get("ETag"); etag == "" {
 		t.Fatal("css response carries no ETag")
