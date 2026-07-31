@@ -45,7 +45,7 @@ func newServer(opts rweb.ServerOptions, st *store.Store) *rweb.Server {
 		s.Use(rweb.RequestInfo)
 	}
 
-	h := handlers{st: st}
+	h := handlers{st: st, status: newStatusCache(statusCacheTTL)}
 
 	// Liveness/readiness probe
 	s.Get("/health", func(ctx rweb.Context) error {

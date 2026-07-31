@@ -117,6 +117,11 @@ func TestStatusEndpoint(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
+	// The cached path writes raw bytes, so it has to set this itself — where
+	// rweb's WriteJSON used to do it.
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+		t.Fatalf("content-type = %q, want application/json", ct)
+	}
 
 	var payload map[string]any
 	if err := json.Unmarshal([]byte(body), &payload); err != nil {
@@ -128,6 +133,53 @@ func TestStatusEndpoint(t *testing.T) {
 	// JSON numbers decode as float64.
 	if payload["visits"] != float64(1) {
 		t.Fatalf(`payload["visits"] = %v, want 1`, payload["visits"])
+	}
+}
+
+// TestStatusCacheReusesBodyWithinTTL pins the point of the cache: a changed
+// visit count is *not* reflected until the window passes. Uses an
+// effectively-infinite TTL rather than a sleep, so the assertion cannot flake
+// on a loaded machine.
+func TestStatusCacheReusesBodyWithinTTL(t *testing.T) {
+	c := newStatusCache(time.Hour)
+
+	count := 1
+	first, err := c.body(func() int { return count })
+	if err != nil {
+		t.Fatalf("first body: %v", err)
+	}
+	if !strings.Contains(string(first), `"visits":1`) {
+		t.Fatalf("first body = %s, want visits 1", first)
+	}
+
+	count = 99
+	second, err := c.body(func() int { return count })
+	if err != nil {
+		t.Fatalf("second body: %v", err)
+	}
+	if string(second) != string(first) {
+		t.Fatalf("body refreshed inside the TTL: %s -> %s", first, second)
+	}
+}
+
+// TestStatusCacheRefreshesAfterTTL exercises the other branch. A zero TTL
+// expires every entry the instant it is stored, so the refresh is forced
+// deterministically — again, no sleeping.
+func TestStatusCacheRefreshesAfterTTL(t *testing.T) {
+	c := newStatusCache(0)
+
+	count := 1
+	if _, err := c.body(func() int { return count }); err != nil {
+		t.Fatalf("first body: %v", err)
+	}
+
+	count = 99
+	second, err := c.body(func() int { return count })
+	if err != nil {
+		t.Fatalf("second body: %v", err)
+	}
+	if !strings.Contains(string(second), `"visits":99`) {
+		t.Fatalf("second body = %s, want visits 99", second)
 	}
 }
 

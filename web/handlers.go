@@ -1,22 +1,29 @@
 package web
 
 import (
+	"encoding/json"
 	"os"
+	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/rohanthewiz/element"
 	"github.com/rohanthewiz/logger"
 	"github.com/rohanthewiz/rweb"
+	"github.com/rohanthewiz/rweb/consts"
 	"github.com/rohanthewiz/serr"
 
 	"mini/assets"
 	"mini/store"
 )
 
-// handlers groups the route handlers around their one shared dependency (the
-// datastore), so tests can stand up a handler set against a throwaway store
-// instead of package-level state.
+// handlers groups the route handlers around their shared dependencies, so
+// tests can stand up a handler set against a throwaway store instead of
+// package-level state. status is a pointer because it carries a mutex and
+// method values copy the receiver at route-registration time.
 type handlers struct {
-	st *store.Store
+	st     *store.Store
+	status *statusCache
 }
 
 // rootHandler records the visit, then server-renders the landing page showing
@@ -41,13 +48,97 @@ func (h handlers) rootHandler(ctx rweb.Context) error {
 
 // statusHandler is the JSON status endpoint. The client script polls it to
 // keep the on-page visit counter live — its shape is mirrored by the Status
-// interface in assets/app.ts.
+// interface in assets/app.ts. The body is served from a short-lived cache
+// (see statusCache), so the per-request work is a pointer load and a copy.
 func (h handlers) statusHandler(ctx rweb.Context) error {
-	return ctx.WriteJSON(map[string]any{
-		"response": "OK",
-		"env":      envName(),
-		"visits":   h.st.VisitCount(), // atomic load — O(1) at any table size
+	body, err := h.status.body(h.st.VisitCount)
+	if err != nil {
+		return serr.Wrap(err, "building status response")
+	}
+
+	// ctx.Bytes is the raw-body writer, so the content type WriteJSON would
+	// have set has to be set here instead.
+	ctx.Response().SetHeader(consts.HeaderContentType, consts.MIMEJSON)
+	return ctx.Bytes(body)
+}
+
+// statusCacheTTL is how long one serialized /api/status body is reused.
+// Every open tab polls the endpoint every 5s, so this collapses N clients'
+// polls into at most one marshal per second. The trade is that the reported
+// count may trail reality by up to a second — immaterial for a number the
+// client only redraws every 5s anyway.
+const statusCacheTTL = time.Second
+
+// statusPayload is the /api/status response body. A struct rather than a
+// map[string]any: no map allocation, no key sorting inside encoding/json,
+// and the wire shape is declared in exactly one place.
+type statusPayload struct {
+	Response string `json:"response"`
+	Env      string `json:"env"`
+	Visits   int    `json:"visits"`
+}
+
+// statusEntry is one immutable snapshot of the serialized response. Both
+// fields are written before the entry is published to the atomic pointer and
+// never mutated after, which is what lets readers work without a lock.
+type statusEntry struct {
+	body    []byte
+	expires time.Time
+}
+
+// statusCache memoizes the serialized status body for ttl.
+//
+// Reads are lock-free — an atomic pointer load plus a deadline comparison.
+// Refreshes take the mutex and re-check first, so a burst of pollers landing
+// together on an expiry does one marshal between them rather than one each
+// (the thundering-herd case this endpoint is most exposed to).
+//
+//	hit  ──> cur.Load ──> unexpired ──> return bytes
+//	miss ──> mu.Lock ──> re-check ──> marshal ──> cur.Store ──> return bytes
+type statusCache struct {
+	cur atomic.Pointer[statusEntry]
+	mu  sync.Mutex
+	ttl time.Duration
+}
+
+// newStatusCache returns an empty cache with the given freshness window. A
+// ttl of zero disables caching (every call re-marshals), which is what the
+// tests use to exercise the refresh path without sleeping.
+func newStatusCache(ttl time.Duration) *statusCache {
+	return &statusCache{ttl: ttl}
+}
+
+// body returns the cached response bytes, refreshing them if the window has
+// passed. The caller must treat the slice as read-only — it is shared by
+// every request served from the same entry.
+//
+// visitCount is taken as a function, not a value, so the count is sampled at
+// marshal time under the mutex: a goroutine that stalled on its way in can
+// never publish an entry built from a stale reading.
+func (c *statusCache) body(visitCount func() int) ([]byte, error) {
+	if e := c.cur.Load(); e != nil && time.Now().Before(e.expires) {
+		return e.body, nil
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Someone may have refreshed while we waited for the lock.
+	if e := c.cur.Load(); e != nil && time.Now().Before(e.expires) {
+		return e.body, nil
+	}
+
+	body, err := json.Marshal(statusPayload{
+		Response: "OK",
+		Env:      envName(),
+		Visits:   visitCount(), // atomic load — O(1) at any table size
 	})
+	if err != nil {
+		return nil, serr.Wrap(err, "marshalling status payload")
+	}
+
+	c.cur.Store(&statusEntry{body: body, expires: time.Now().Add(c.ttl)})
+	return body, nil
 }
 
 // cssHandler serves the stylesheet compiled from styles.styl. Compilation is

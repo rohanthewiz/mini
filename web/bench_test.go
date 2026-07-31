@@ -1,10 +1,12 @@
 package web
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/rohanthewiz/bytdb"
 
@@ -74,6 +76,57 @@ func BenchmarkHTTPStatus(b *testing.B) {
 			benchGet(b, base, "/api/status")
 		})
 	}
+}
+
+// BenchmarkStatusBody isolates building the /api/status body from the ~25µs
+// HTTP round trip that otherwise swamps it. Three shapes:
+//
+//   - cached: the hot path now — atomic load, deadline compare, return.
+//   - marshal-struct: a cache miss, i.e. what one client per second pays.
+//   - marshal-map: the previous implementation's per-request work, kept as
+//     the honest before-number (map allocation + encoding/json key sorting).
+func BenchmarkStatusBody(b *testing.B) {
+	visitCount := func() int { return 42 }
+
+	b.Run("cached", func(b *testing.B) {
+		// An hour-long window never expires mid-run, so every iteration
+		// after the first is a hit.
+		c := newStatusCache(time.Hour)
+		b.ReportAllocs()
+
+		for b.Loop() {
+			if _, err := c.body(visitCount); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+
+	b.Run("marshal-struct", func(b *testing.B) {
+		// A zero window expires each entry as it is stored, forcing the
+		// refresh path (mutex, marshal, publish) on every call.
+		c := newStatusCache(0)
+		b.ReportAllocs()
+
+		for b.Loop() {
+			if _, err := c.body(visitCount); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+
+	b.Run("marshal-map", func(b *testing.B) {
+		b.ReportAllocs()
+
+		for b.Loop() {
+			if _, err := json.Marshal(map[string]any{
+				"response": "OK",
+				"env":      envName(),
+				"visits":   visitCount(),
+			}); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
 }
 
 // --- Full page: DB write + count scan + recent scan + HTML render ---
