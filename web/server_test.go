@@ -183,6 +183,96 @@ func TestStatusCacheRefreshesAfterTTL(t *testing.T) {
 	}
 }
 
+// getConditional issues a GET carrying If-None-Match, which the plain get
+// helper cannot do.
+func getConditional(t *testing.T, url, ifNoneMatch string) (*http.Response, string) {
+	t.Helper()
+
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		t.Fatalf("build request for %s: %v", url, err)
+	}
+	req.Header.Set("If-None-Match", ifNoneMatch)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET %s: %v", url, err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body of %s: %v", url, err)
+	}
+	return resp, string(body)
+}
+
+// TestAssetConditionalRequest walks the round trip a returning browser makes:
+// fetch, remember the ETag, re-request with it, get a body-less 304. A stale
+// tag must still get the full asset.
+func TestAssetConditionalRequest(t *testing.T) {
+	base, _ := startTestServer(t)
+
+	for _, path := range []string{"/assets/app.css", "/assets/app.js"} {
+		first, full := get(t, base+path)
+		etag := first.Header.Get("ETag")
+		if etag == "" {
+			t.Fatalf("%s: no ETag on first response", path)
+		}
+
+		second, body := getConditional(t, base+path, etag)
+		if second.StatusCode != http.StatusNotModified {
+			t.Fatalf("%s: conditional status = %d, want 304", path, second.StatusCode)
+		}
+		if body != "" {
+			t.Fatalf("%s: 304 carried a %d-byte body", path, len(body))
+		}
+		// The validator has to come back on the 304 too, or the client has
+		// nothing to revalidate with next time.
+		if got := second.Header.Get("ETag"); got != etag {
+			t.Fatalf("%s: 304 ETag = %q, want %q", path, got, etag)
+		}
+
+		stale, body := getConditional(t, base+path, `"0000000000000000"`)
+		if stale.StatusCode != http.StatusOK {
+			t.Fatalf("%s: stale-tag status = %d, want 200", path, stale.StatusCode)
+		}
+		if body != full {
+			t.Fatalf("%s: stale-tag body differs from the unconditional body", path)
+		}
+	}
+}
+
+// TestETagMatches covers the If-None-Match parsing rules that a real browser
+// or proxy can exercise but the happy-path test above never will.
+func TestETagMatches(t *testing.T) {
+	const etag = `"abc123"`
+
+	cases := []struct {
+		name        string
+		ifNoneMatch string
+		want        bool
+	}{
+		{"absent", "", false},
+		{"exact", `"abc123"`, true},
+		{"wildcard", "*", true},
+		{"weak prefix", `W/"abc123"`, true},
+		{"list containing it", `"other", "abc123"`, true},
+		{"list without it", `"other", "another"`, false},
+		{"different tag", `"abc124"`, false},
+		{"unquoted", "abc123", false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := etagMatches(tc.ifNoneMatch, etag); got != tc.want {
+				t.Fatalf("etagMatches(%q, %q) = %v, want %v",
+					tc.ifNoneMatch, etag, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestAssetEndpoints(t *testing.T) {
 	base, _ := startTestServer(t)
 
@@ -193,6 +283,12 @@ func TestAssetEndpoints(t *testing.T) {
 	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/css") {
 		t.Fatalf("css content-type = %q, want text/css", ct)
 	}
+	if cc := resp.Header.Get("Cache-Control"); cc != assetCacheControl {
+		t.Fatalf("css cache-control = %q, want %q", cc, assetCacheControl)
+	}
+	if etag := resp.Header.Get("ETag"); etag == "" {
+		t.Fatal("css response carries no ETag")
+	}
 	// Spot-check that Stylus actually compiled: the accent variable #0af
 	// should appear as a resolved color value, not as a variable name.
 	if !strings.Contains(body, "#0af") && !strings.Contains(body, "#00aaff") {
@@ -202,6 +298,9 @@ func TestAssetEndpoints(t *testing.T) {
 	resp, body = get(t, base+"/assets/app.js")
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("js status = %d, want 200", resp.StatusCode)
+	}
+	if etag := resp.Header.Get("ETag"); etag == "" {
+		t.Fatal("js response carries no ETag")
 	}
 	if !strings.Contains(body, "/api/status") {
 		t.Fatalf("minified JS missing the status endpoint reference; got:\n%s", body)

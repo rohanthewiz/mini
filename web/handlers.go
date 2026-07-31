@@ -2,7 +2,9 @@ package web
 
 import (
 	"encoding/json"
+	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -141,24 +143,79 @@ func (c *statusCache) body(visitCount func() int) ([]byte, error) {
 	return body, nil
 }
 
-// cssHandler serves the stylesheet compiled from styles.styl. Compilation is
-// cached after the first call (see assets package), so this is a string copy
-// per request.
+// assetCacheControl is what the asset routes advertise.
+//
+// The URLs are stable across builds (/assets/app.css, not
+// /assets/app.<hash>.css), so a long max-age would pin clients to a stale
+// bundle after a deploy with no way to bust it. "no-cache" does not mean "do
+// not store" — it means "store it, but revalidate before reuse", which is
+// exactly the trade available here: the client keeps the bytes and we settle
+// the conditional request with a header-only 304 instead of resending the
+// asset.
+//
+// Fingerprinting the URLs is what would unlock
+// "public, max-age=31536000, immutable"; that changes the rendered HTML, so
+// it is a separate step.
+const assetCacheControl = "no-cache"
+
+// serveAsset writes a compiled asset with its cache headers, answering with
+// 304 when the client already holds this version. send is the rweb helper
+// that owns the content type (rweb.CSS, rweb.JS), so each asset route stays
+// a two-liner.
+func serveAsset(ctx rweb.Context, asset assets.Asset, send func(rweb.Context, string) error) error {
+	res := ctx.Response()
+	res.SetHeader(consts.HeaderCacheControl, assetCacheControl)
+	res.SetHeader(consts.HeaderETag, asset.ETag)
+
+	if etagMatches(ctx.Request().Header(consts.HeaderIfNoneMatch), asset.ETag) {
+		// A 304 carries no body and no content type — the validators set
+		// above are the entire response.
+		ctx.SetStatus(http.StatusNotModified)
+		return nil
+	}
+
+	return send(ctx, asset.Body)
+}
+
+// etagMatches reports whether an If-None-Match header covers etag. Per RFC
+// 9110 the value is a comma-separated list, "*" matches any current
+// representation, and entries may carry a weak "W/" prefix. Conditional GETs
+// use the weak comparison function, so the prefix is stripped rather than
+// treated as part of the tag.
+func etagMatches(ifNoneMatch, etag string) bool {
+	if ifNoneMatch == "" {
+		return false
+	}
+	if strings.TrimSpace(ifNoneMatch) == "*" {
+		return true
+	}
+
+	for candidate := range strings.SplitSeq(ifNoneMatch, ",") {
+		if strings.TrimPrefix(strings.TrimSpace(candidate), "W/") == etag {
+			return true
+		}
+	}
+	return false
+}
+
+// cssHandler serves the stylesheet compiled from styles.styl. Compilation and
+// hashing both happen once per process (see assets package), so a cache hit
+// here is a header write and a comparison.
 func cssHandler(ctx rweb.Context) error {
-	body, err := assets.CSS()
+	asset, err := assets.CSS()
 	if err != nil {
 		return serr.Wrap(err, "getting compiled CSS")
 	}
-	return rweb.CSS(ctx, body)
+	return serveAsset(ctx, asset, rweb.CSS)
 }
 
 // jsHandler serves the minified client script transpiled from app.ts.
 func jsHandler(ctx rweb.Context) error {
-	body, err := assets.JS()
+	asset, err := assets.JS()
 	if err != nil {
 		return serr.Wrap(err, "getting compiled JS")
 	}
-	return rweb.JS(ctx, body)
+	return serveAsset(ctx, asset, rweb.JS)
 }
 
 // envName reports the deployment environment, defaulting to "dev" so the page

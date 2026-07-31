@@ -26,7 +26,9 @@ The server listens on `:8000` by default.
 - `GET /api/status` — JSON `{response, env, visits}`; the client script polls
   it every 5s to keep the on-page counter live
 - `GET /health` — liveness/readiness probe (returns `ok`)
-- `GET /assets/app.css`, `GET /assets/app.js` — compiled front-end assets
+- `GET /assets/app.css`, `GET /assets/app.js` — compiled front-end assets,
+  served with `Cache-Control: no-cache` and a content-derived `ETag`, so a
+  returning client revalidates and gets a body-less 304
 
 ## Front-end pipeline
 
@@ -39,7 +41,15 @@ per process (`sync.OnceValues`) and served from memory:
   Go API — TypeScript stripping, minification, no toolchain to install
 
 `main()` pre-warms both at startup, so a compile error fails the process
-instead of surfacing as a 500 on the first request.
+instead of surfacing as a 500 on the first request. Each asset carries an
+`ETag` hashed from its compiled output at the same time.
+
+The asset URLs are stable across builds, so they advertise
+`Cache-Control: no-cache` — "store it, but revalidate before reuse" — rather
+than a long `max-age` that would strand clients on a stale bundle after a
+deploy. Revalidation costs a header-only 304. Fingerprinting the URLs
+(`/assets/app.<hash>.css`) is what would unlock
+`max-age=31536000, immutable`.
 
 ## Storage
 
