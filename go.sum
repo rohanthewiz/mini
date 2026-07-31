@@ -6,10 +6,10 @@ github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZb
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
 github.com/rohanthewiz/assert v0.1.2 h1:coi0nUTAuqgpxoa7THQynDnBKUzV9Bid+tNaocUkCYE=
 github.com/rohanthewiz/assert v0.1.2/go.mod h1:Xix0OMMRN0aGkE207Wk5GJk0eWlpcNGph0+kYpuq+vQ=
-github.com/rohanthewiz/btypedb v0.6.2 h1:JaWl0BOuFTBSOqlcd1O1LbBnfgH5jDZF21RYk9ptqjk=
-github.com/rohanthewiz/btypedb v0.6.2/go.mod h1:K+7M8clbmaVh33X9QYm1sA5A7DWDKOE1+O9WFQflMI0=
-github.com/rohanthewiz/bytdb v0.6.4 h1:me8nnzc/o0K/WwV18P1ri37pmiaCEniTCBKrYHY5fFg=
-github.com/rohanthewiz/bytdb v0.6.4/go.mod h1:PClxPjLoRjr8E0/8xQIiNbvX0brObZ/YUKcyHXCn1z4=
+github.com/rohanthewiz/btypedb v0.7.0 h1:i8zu+Rc5YIkocbVuNk1jlnb94g9RTtJQGAGm9xob+QI=
+github.com/rohanthewiz/btypedb v0.7.0/go.mod h1:K+7M8clbmaVh33X9QYm1sA5A7DWDKOE1+O9WFQflMI0=
+github.com/rohanthewiz/bytdb v0.7.0 h1:d8h5XRzKX450zPONbQFJ6999tcgnQOgKb2V+RUBwFNU=
+github.com/rohanthewiz/bytdb v0.7.0/go.mod h1:HKuQb7ptS/dPzagWWttvfy1qkQulke/p8JUHZeDOvO4=
 github.com/rohanthewiz/element v0.5.6 h1:ngtHqe7asrJavAotQVNBK2veXgnGEIfcCzm7AYVJFHM=
 github.com/rohanthewiz/element v0.5.6/go.mod h1:YZnKqWX2lSsR+zi06x3vhViYVoOSx8xHQjUMTmM/FLo=
 github.com/rohanthewiz/go-styl v0.2.0 h1:yRFXDo5qx8+IUdEcSujubO/45kyMTbBU/y1+lVDRqss=

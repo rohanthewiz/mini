@@ -29,10 +29,17 @@ func startTestServer(t testing.TB, opts ...store.Option) (baseURL string, st *st
 	}
 	t.Cleanup(func() { _ = st.Close() })
 
+	// Tests keep per-request logging (it is only surfaced when a test fails,
+	// where it is exactly the diagnostic you want); benchmarks turn it off,
+	// since rweb.RequestInfo prints straight to stdout and would otherwise
+	// interleave with — and bury — the ns/op lines.
+	_, isBench := t.(*testing.B)
+
 	ready := make(chan struct{}, 1)
 	s := newServer(rweb.ServerOptions{
 		Address:   ":0",
 		ReadyChan: ready,
+		Verbose:   !isBench,
 	}, st)
 
 	go func() {

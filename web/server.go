@@ -36,7 +36,14 @@ func StartWebServer(st *store.Store) {
 func newServer(opts rweb.ServerOptions, st *store.Store) *rweb.Server {
 	s := rweb.NewServer(opts)
 
-	s.Use(rweb.RequestInfo)
+	// Request logging rides on the caller's Verbose flag rather than being
+	// unconditional: rweb.RequestInfo writes a line to stdout per request with
+	// no switch of its own, which under `go test -bench` interleaves with the
+	// benchmark's own stdout and buries the ns/op results. Benchmarks leave
+	// Verbose off (see startTestServer); the real server sets it.
+	if opts.Verbose {
+		s.Use(rweb.RequestInfo)
+	}
 
 	h := handlers{st: st}
 

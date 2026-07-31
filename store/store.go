@@ -13,6 +13,25 @@
 //
 //	RecordVisit ──> msgCh ──> writer goroutine ──> one Txn per batch ──> fsync
 //	VisitCount  ──> atomic load (no engine touch)
+//
+// # Write mode
+//
+// bytdb v0.7.0 added an opt-in concurrent-write mode
+// (bytdb.WithConcurrentWrites): parallel writers on COW snapshots validated
+// at commit, instead of one writer lock. This package deliberately stays on
+// the default single-writer mode. OCC relieves contention between writers,
+// and the design above has exactly one — so there is nothing to relieve, and
+// two costs land instead (both measured in bench_test.go):
+//
+//   - Per-commit snapshot and validation overhead with no offsetting win.
+//   - Sequence draws go non-transactional in that mode, so the NextSeq calls
+//     inside commitBatch stop riding the batch transaction and commit
+//     separately (in blocks of 32). A 256-row batch then costs ~9 durable
+//     commits instead of 1 — measured 13µs/visit → 99µs/visit.
+//
+// Batching, not parallelism, is what this workload needs: the cost is the
+// fsync, and only amortizing it across rows removes it. Revisit the mode if
+// independent writers ever contend here (e.g. several unrelated tables).
 package store
 
 import (
