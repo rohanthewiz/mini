@@ -10,3 +10,6 @@ testing/
 certs/
 
 mini
+
+# bytdb database file (and any sidecar files)
+mini.db*

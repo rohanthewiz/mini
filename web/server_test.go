@@ -4,21 +4,36 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"path/filepath"
+	"regexp"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/rohanthewiz/rweb"
+
+	"mini/store"
 )
 
-// startTestServer spins up the server on a random port and returns its base URL.
-func startTestServer(t *testing.T) string {
+// startTestServer spins up the full route table on a random port, backed by a
+// throwaway bytdb file in a temp dir, and returns the server's base URL along
+// with the store so callers (benchmarks especially) can seed data directly.
+// testing.TB lets both tests and benchmarks share it; opts tune the engine
+// (benchmarks pass bytdb.WithSyncNever() to make seeding cheap).
+func startTestServer(t testing.TB, opts ...store.Option) (baseURL string, st *store.Store) {
 	t.Helper()
+
+	st, err := store.Open(filepath.Join(t.TempDir(), "test.db"), opts...)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
 
 	ready := make(chan struct{}, 1)
 	s := newServer(rweb.ServerOptions{
 		Address:   ":0",
 		ReadyChan: ready,
-	})
+	}, st)
 
 	go func() {
 		if err := s.Run(); err != nil {
@@ -32,49 +47,108 @@ func startTestServer(t *testing.T) string {
 		t.Fatal("server did not become ready in time")
 	}
 
-	return "http://" + s.GetListenAddr()
+	return "http://" + s.GetListenAddr(), st
 }
 
-func TestHealthEndpoint(t *testing.T) {
-	base := startTestServer(t)
+// get fetches a URL and returns the response and body, failing the test on
+// transport errors.
+func get(t testing.TB, url string) (*http.Response, string) {
+	t.Helper()
 
-	resp, err := http.Get(base + "/health")
+	resp, err := http.Get(url)
 	if err != nil {
-		t.Fatalf("GET /health: %v", err)
+		t.Fatalf("GET %s: %v", url, err)
 	}
 	defer resp.Body.Close()
 
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body of %s: %v", url, err)
+	}
+	return resp, string(body)
+}
+
+func TestHealthEndpoint(t *testing.T) {
+	base, _ := startTestServer(t)
+
+	resp, body := get(t, base+"/health")
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		t.Fatalf("read body: %v", err)
-	}
-	if got := string(body); got != "ok" {
-		t.Fatalf("body = %q, want %q", got, "ok")
+	if body != "ok" {
+		t.Fatalf("body = %q, want %q", body, "ok")
 	}
 }
 
 func TestRootEndpoint(t *testing.T) {
-	base := startTestServer(t)
+	base, _ := startTestServer(t)
 
-	resp, err := http.Get(base + "/")
-	if err != nil {
-		t.Fatalf("GET /: %v", err)
+	// Each GET / records a visit, so the second view must show a count of 2 —
+	// this exercises the whole loop: handler -> bytdb insert -> scan -> HTML.
+	get(t, base+"/")
+	resp, body := get(t, base+"/")
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
-	defer resp.Body.Close()
+	// Attribute order within a tag is not guaranteed, so match with a regex.
+	if !regexp.MustCompile(`id="live-visits"[^>]*>2<`).MatchString(body) {
+		t.Fatalf("page does not show a visit count of 2; body:\n%s", body)
+	}
+	if !strings.Contains(body, "/assets/app.css") || !strings.Contains(body, "/assets/app.js") {
+		t.Fatalf("page does not reference compiled assets; body:\n%s", body)
+	}
+}
 
+func TestStatusEndpoint(t *testing.T) {
+	base, _ := startTestServer(t)
+
+	// One page view first, so the visits field has something to report.
+	get(t, base+"/")
+
+	resp, body := get(t, base+"/api/status")
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
 
 	var payload map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+	if err := json.Unmarshal([]byte(body), &payload); err != nil {
 		t.Fatalf("decode JSON: %v", err)
 	}
 	if payload["response"] != "OK" {
 		t.Fatalf(`payload["response"] = %v, want "OK"`, payload["response"])
+	}
+	// JSON numbers decode as float64.
+	if payload["visits"] != float64(1) {
+		t.Fatalf(`payload["visits"] = %v, want 1`, payload["visits"])
+	}
+}
+
+func TestAssetEndpoints(t *testing.T) {
+	base, _ := startTestServer(t)
+
+	resp, body := get(t, base+"/assets/app.css")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("css status = %d, want 200", resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/css") {
+		t.Fatalf("css content-type = %q, want text/css", ct)
+	}
+	// Spot-check that Stylus actually compiled: the accent variable #0af
+	// should appear as a resolved color value, not as a variable name.
+	if !strings.Contains(body, "#0af") && !strings.Contains(body, "#00aaff") {
+		t.Fatalf("compiled CSS missing accent color; got:\n%s", body)
+	}
+
+	resp, body = get(t, base+"/assets/app.js")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("js status = %d, want 200", resp.StatusCode)
+	}
+	if !strings.Contains(body, "/api/status") {
+		t.Fatalf("minified JS missing the status endpoint reference; got:\n%s", body)
+	}
+	// Minified output must not retain TypeScript syntax.
+	if strings.Contains(body, "interface ") || strings.Contains(body, ": Promise<") {
+		t.Fatalf("JS still contains TypeScript syntax; got:\n%s", body)
 	}
 }

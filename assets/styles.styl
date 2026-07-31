@@ -1,0 +1,63 @@
+// Site styles, authored in Stylus and compiled to CSS in-process by go-styl
+// (see assets.go). Variables, mixins, and color functions below are resolved
+// at compile time — the browser only ever sees plain, compressed CSS.
+
+// Design tokens — change these and every derived value below recalculates.
+accent = #0af
+ink = #223
+paper = #fafafa
+radius = 6px
+pad = 1rem
+
+// Shared "card" chrome. A mixin (rather than a class) keeps the HTML free of
+// presentational class names — each component mixes the look in directly.
+card()
+  background lighten(paper, 2%)
+  border 1px solid darken(paper, 8%)
+  border-radius radius
+  padding pad
+
+body
+  font-family system-ui, sans-serif
+  color ink
+  background paper
+  max-width 42rem
+  margin (pad * 2) auto
+  padding 0 pad
+
+h1
+  color darken(accent, 30%)
+  border-bottom 2px solid accent
+  padding-bottom (pad / 2)
+
+.stats
+  card()
+  display flex
+  gap pad
+
+  .stat
+    flex 1
+    text-align center
+
+    .num
+      font-size 2rem
+      font-weight 700
+      color accent
+
+    .label
+      font-size 0.85rem
+      color lighten(ink, 40%)
+      text-transform uppercase
+
+table.visits
+  card()
+  width 100%
+  border-collapse collapse
+  margin-top pad
+
+  th, td
+    text-align left
+    padding (pad / 4) (pad / 2)
+
+  tbody tr:nth-child(odd)
+    background darken(paper, 3%)
