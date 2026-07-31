@@ -1,6 +1,7 @@
 # mini
 
 [![CI](https://github.com/rohanthewiz/mini/actions/workflows/ci.yml/badge.svg)](https://github.com/rohanthewiz/mini/actions/workflows/ci.yml)
+[![Go](https://img.shields.io/github/go-mod/go-version/rohanthewiz/mini)](go.mod)
 
 A small, dependency-light Go web service: [rweb](https://github.com/rohanthewiz/rweb)
 for HTTP, [element](https://github.com/rohanthewiz/element) for server-rendered
